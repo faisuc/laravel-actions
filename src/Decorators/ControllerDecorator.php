@@ -3,12 +3,14 @@
 namespace Lorisleiva\Actions\Decorators;
 
 use Illuminate\Container\Container;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Routing\Route;
 use Illuminate\Routing\RouteDependencyResolverTrait;
 use Illuminate\Support\Str;
 use Lorisleiva\Actions\ActionRequest;
 use Lorisleiva\Actions\Concerns\DecorateActions;
 use Lorisleiva\Actions\Concerns\WithAttributes;
+use ReflectionMethod;
 
 class ControllerDecorator
 {
@@ -155,12 +157,44 @@ class ControllerDecorator
     {
         $this->container = Container::getInstance();
 
+        $this->container->instance(Route::class, $this->route);
+
+        $parameters = $this->route->parametersWithoutNulls();
+        $parameters = $this->resolveRouteModelBindings($parameters, $method);
+
         $arguments = $this->resolveClassMethodDependencies(
-            $this->route->parametersWithoutNulls(),
+            $parameters,
             $this->action,
             $method
         );
 
         return $this->action->{$method}(...array_values($arguments));
+    }
+
+    protected function resolveRouteModelBindings(array $parameters, string $method): array
+    {
+        foreach ($parameters as $key => $value) {
+            if (is_object($value)) {
+                continue;
+            }
+
+            $reflection = new ReflectionMethod($this->action, $method);
+            $reflectionParameters = $reflection->getParameters();
+            
+            foreach ($reflectionParameters as $reflectionParameter) {
+                if ($reflectionParameter->getName() === $key) {
+                    $type = $reflectionParameter->getType();
+                    if ($type && !$type->isBuiltin() && class_exists($type->getName())) {
+                        $modelClass = $type->getName();
+                        if (is_subclass_of($modelClass, Model::class)) {
+                            $parameters[$key] = $modelClass::findOrFail($value);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        return $parameters;
     }
 }
